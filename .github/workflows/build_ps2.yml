@@ -50,13 +50,10 @@ jobs:
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
-      - name: Start Docker Compose
+      - name: Run SCons inside Container
         run: |
-          docker compose -f platform/ps2/docker-compose.yml up -d
-
-      - name: Run SCons inside Container (Parallelized)
-        run: |
-          docker exec -w /godot -t godot-ps2-compiler sh -c 'scons platform=ps2 -j$(nproc)'
+          # Mounts the full workspace root (containing SConstruct and platform/ps2) into /godot
+          docker run --rm -v ${{ github.workspace }}:/godot godot-ps2:latest sh -c 'scons platform=ps2 -j$(nproc)'
 
       - name: Archive Artifacts
         uses: actions/upload-artifact@v4
@@ -65,8 +62,3 @@ jobs:
           path: |
             bin/
           if-no-files-found: warn
-
-      - name: Stop Docker Containers
-        if: always()
-        run: |
-          docker compose -f platform/ps2/docker-compose.yml down || true
