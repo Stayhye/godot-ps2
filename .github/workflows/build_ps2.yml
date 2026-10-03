@@ -12,51 +12,42 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository (godot-ps2)
-        uses: actions/checkout@v4
-        with:
-          path: ps2_platform # Checkout your repo into a subfolder temporarily
-
-      - name: Checkout Godot Engine Source
-        uses: actions/checkout@v4
-        with:
-          repository: godotengine/godot
-          # Change this ref/branch if this PS2 port targets a specific Godot version (e.g., 3.x, 4.0, etc.)
-          ref: 3.x 
-          path: godot
-
-      - name: Merge Platform Files into Godot
+      - name: Clone Godot Engine at Specific Commit
         run: |
-          # Copy or move the PS2 platform files into Godot's platform directory structure if needed,
-          # OR move the cloned Godot source into your repo's expected path layout.
-          # Based on your Dockerfile expecting a 'godot' directory at the build root:
-          rm -rf ps2_platform/.git
-          mv ps2_platform godot/platform/ps2
+          git init .
+          git remote add origin https://github.com/godotengine/godot.git
+          git fetch origin 3cd3caab6779a7f3ec3bbeb9f200db50c735cfc8 --depth=1
+          git checkout FETCH_HEAD
+
+      - name: Checkout godot-ps2 into platform/ps2
+        uses: actions/checkout@v4
+        with:
+          path: platform/ps2
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and Start Docker Container
+      - name: Build Docker Image
         run: |
-          cd godot
           docker build -t godot-ps2:latest -f platform/ps2/Dockerfile .
+
+      - name: Start Docker Compose
+        run: |
           docker compose -f platform/ps2/docker-compose.yml up -d
 
       - name: Run SCons inside Container
         run: |
           docker exec -t godot-ps2-compiler sh -c 'scons platform=ps2'
 
-      - name: Locate and Archive Artifacts
+      - name: Archive Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: godot-ps2-export-template
           path: |
-            godot/bin/
-            *.a
-            *.elf
+            bin/
           if-no-files-found: warn
 
       - name: Stop Docker Containers
         if: always()
         run: |
-          docker compose down || true
+          docker compose -f platform/ps2/docker-compose.yml down || true
