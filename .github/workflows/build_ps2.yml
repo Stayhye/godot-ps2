@@ -1,0 +1,49 @@
+name: Build Godot PS2 Export Template
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Compose
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and Start Docker Container
+        run: |
+          # Build the Docker image as specified in your instructions
+          docker build -t godot-ps2:latest .
+          
+          # Start the container using Docker Compose
+          docker compose up -d
+
+      - name: Run SCons inside Container
+        run: |
+          # Execute the SCons build command inside the running container
+          docker exec -t godot-ps2-compiler sh -c 'scons platform=ps2'
+
+      - name: Locate and Archive Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-ps2-export-template
+          path: |
+            # Adjust these paths if your output binaries are placed in a specific bin/ directory
+            bin/
+            *.a
+            *.elf
+            *.upx
+          if-no-files-found: warn
+
+      - name: Stop Docker Containers
+        if: always()
+        run: |
+          docker compose down
