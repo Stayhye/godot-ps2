@@ -12,23 +12,38 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout Repository (godot-ps2)
         uses: actions/checkout@v4
+        with:
+          path: ps2_platform # Checkout your repo into a subfolder temporarily
 
-      - name: Set up Docker Compose
+      - name: Checkout Godot Engine Source
+        uses: actions/checkout@v4
+        with:
+          repository: godotengine/godot
+          # Change this ref/branch if this PS2 port targets a specific Godot version (e.g., 3.x, 4.0, etc.)
+          ref: 3.x 
+          path: godot
+
+      - name: Merge Platform Files into Godot
+        run: |
+          # Copy or move the PS2 platform files into Godot's platform directory structure if needed,
+          # OR move the cloned Godot source into your repo's expected path layout.
+          # Based on your Dockerfile expecting a 'godot' directory at the build root:
+          rm -rf ps2_platform/.git
+          mv ps2_platform godot/platform/ps2
+
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Build and Start Docker Container
         run: |
-          # Build the Docker image as specified in your instructions
-          docker build -t godot-ps2:latest .
-          
-          # Start the container using Docker Compose
-          docker compose up -d
+          cd godot
+          docker build -t godot-ps2:latest -f platform/ps2/Dockerfile .
+          docker compose -f platform/ps2/docker-compose.yml up -d
 
       - name: Run SCons inside Container
         run: |
-          # Execute the SCons build command inside the running container
           docker exec -t godot-ps2-compiler sh -c 'scons platform=ps2'
 
       - name: Locate and Archive Artifacts
@@ -36,14 +51,12 @@ jobs:
         with:
           name: godot-ps2-export-template
           path: |
-            # Adjust these paths if your output binaries are placed in a specific bin/ directory
-            bin/
+            godot/bin/
             *.a
             *.elf
-            *.upx
           if-no-files-found: warn
 
       - name: Stop Docker Containers
         if: always()
         run: |
-          docker compose down
+          docker compose down || true
