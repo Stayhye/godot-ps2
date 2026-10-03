@@ -1,75 +1,79 @@
 # syntax=docker/dockerfile:1
-FROM ubuntu:20.04
+FROM ubuntu:20.04 as builder
 
-# Install necessary packages for PS2DEV, VCLPP and VCL.
-RUN apt-get update
+# Avoid prompts from apt
 ARG DEBIAN_FRONTEND=noninteractive
-RUN apt-get install -y git make g++ texinfo bison flex gettext libgmp3-dev \
-    libmpfr-dev libmpc-dev gcc binutils cmake wget patch zlib1g-dev libgsl-dev \
-    unzip curl build-essential
 
-# Setup PS2DEV env
+# Install necessary packages for PS2DEV, VCLPP and VCL
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git make g++ texinfo bison flex gettext libgmp3-dev \
+    libmpfr-dev libmpc-dev gcc binutils cmake wget patch zlib1g-dev libgsl-dev \
+    unzip curl build-essential ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Setup PS2DEV environment variables
 ENV PS2DEV=/usr/local/ps2dev
 RUN mkdir -p $PS2DEV
-RUN chown -R $USER: $PS2DEV
 ENV PS2SDK=$PS2DEV/ps2sdk
 ENV GSKIT=$PS2DEV/gsKit
 ENV PATH=$PATH:${PS2DEV}/bin:${PS2DEV}/ee/bin:${PS2DEV}/iop/bin:${PS2DEV}/dvp/bin:${PS2SDK}/bin
 
-# Compile PS2DEV
-RUN mkdir -p /temp/ps2dev
-RUN git clone https://github.com/ps2dev/ps2dev.git /temp/ps2dev
-WORKDIR "/temp/ps2dev"
-RUN ./build-all.sh
+# Compile PS2DEV (utilizing all available CPU cores for speed)
+RUN mkdir -p /temp/ps2dev && \
+    git clone --depth 1 https://github.com/ps2dev/ps2dev.git /temp/ps2dev
+WORKDIR /temp/ps2dev
+RUN ./build-all.sh -j$(nproc)
 
 # Compile VCLPP
-RUN mkdir -p /temp/vclpp
-RUN git clone https://github.com/glampert/vclpp.git /temp/vclpp
-WORKDIR "/temp/vclpp"
-RUN make
+RUN mkdir -p /temp/vclpp && \
+    git clone --depth 1 https://github.com/glampert/vclpp.git /temp/vclpp
+WORKDIR /temp/vclpp
+RUN make -j$(nproc)
 
 # Download VCL
 RUN mkdir -p /temp/vcl
-WORKDIR "/temp/vcl"
-RUN wget https://github.com/h4570/tyra/raw/master/assets/vcl
+WORKDIR /temp/vcl
+RUN wget -q https://github.com/h4570/tyra/raw/master/assets/vcl
 
 # ------------------------------------------------------------------------------
 
-# Start from clean image
+# Final stage
 FROM ubuntu:20.04
+
+ARG DEBIAN_FRONTEND=noninteractive
 
 # Set ENV variables
 ENV PS2DEV=/usr/local/ps2dev
 ENV PS2SDK=$PS2DEV/ps2sdk
 ENV PATH=$PATH:${PS2DEV}/bin:${PS2DEV}/ee/bin:${PS2DEV}/iop/bin:${PS2DEV}/dvp/bin:${PS2SDK}/bin
 
-# Copy stuff from previous stage
-COPY --from=0 ${PS2DEV} ${PS2DEV}
-COPY --from=0 /temp/vcl/vcl /usr/bin/vcl
-COPY --from=0 /temp/vclpp/vclpp /usr/bin/vclpp
+# Copy compiled toolchains from builder stage
+COPY --from=builder ${PS2DEV} ${PS2DEV}
+COPY --from=builder /temp/vcl/vcl /usr/bin/vcl
+COPY --from=builder /temp/vclpp/vclpp /usr/bin/vclpp
 
-# Install packages for emulating x86 and Tyra (make, libmpc, psmisc)
-RUN apt-get update
-RUN apt-get install -y make rsync libmpc-dev qemu qemu-user-static binfmt-support psmisc
+# Install runtime packages for emulation, SCons, and build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    make rsync libmpc-dev qemu qemu-user-static binfmt-support psmisc \
+    pkg-config python3 python3-pip ca-certificates && \
+    python3 -m pip install --no-cache-dir scons && \
+    rm -rf /var/lib/apt/lists/*
 
-# Install Python and SCons in the final image
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    pkg-config \
-    python3 python3-pip && \
-    python3 -m pip install scons
+# Add 32-bit executable support for VCL tools
+RUN dpkg --add-architecture i386 && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends libstdc++5:i386 && \
+    rm -rf /var/lib/apt/lists/*
 
-# Add 32bit executables support for VCL
-RUN dpkg --add-architecture i386
-RUN apt-get update
-RUN apt-get install -y libstdc++5:i386
-RUN update-binfmts --install i386 /usr/bin/qemu-i386-static --magic '\x7fELF\x01\x01\x01\x03\x00\x00\x00\x00\x00\x00\x00\x00\x03\x00\x03\x00\x01\x00\x00\x00' --mask '\xff\xff\xff\xff\xff\xff\xff\xfc\xff\xff\xff\xff\xff\xff\xff\xff\xf8\xff\xff\xff\xff\xff\xff\xff'
+RUN update-binfmts --install i386 /usr/bin/qemu-i386-static \
+    --magic '\x7fELF\x01\x01\x01\x03\x00\x00\x00\x00\x00\x00\x00\x00\x03\x00\x03\x00\x01\x00\x00\x00' \
+    --mask '\xff\xff\xff\xff\xff\xff\xff\xfc\xff\xff\xff\xff\xff\xff\xff\xff\xf8\xff\xff\xff\xff\xff\xff\xff' || true
 
-# Set chmod
-RUN chmod 755 /usr/bin/vclpp
-RUN chmod 755 /usr/bin/vcl
+# Set correct permissions
+RUN chmod 755 /usr/bin/vclpp && \
+    chmod 755 /usr/bin/vcl
 
-# Copy the build context into /godot
+# Copy the entire Godot workspace context into the container
 COPY . /godot
 
 WORKDIR /godot
